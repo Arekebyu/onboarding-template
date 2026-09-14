@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstddef>
-#include <vector>
 #include <cstring>
+#include <cstdlib>
+#include <cmath>
 
 // Starter Grid for the 2D heat-diffusion problem.
 //
@@ -10,23 +11,59 @@
 // results; it never touches your internal storage. Keep this interface,
 // everything else is yours.
 class Grid {
-private:
-  const std::size_t rows_;
-  const std::size_t cols_;
-// additions from here
+  private:
+    std::size_t rows_;
+    std::size_t cols_;
+    std::size_t stride_;
+    // additions from here
 
-public:
-  std::vector<double> data;
-  Grid(std::size_t rows, std::size_t cols)
-    : rows_{rows}
+  public:
+    double* data;
+    Grid(std::size_t rows, std::size_t cols)
+      : rows_{rows}
     , cols_{cols}
-    , data{std::vector(rows * cols, 0.0)}
-  {};
+    , stride_{(cols + 7) & ~7} // ceiling to nearest 8 for alignment on doubles
+    , data{nullptr}
+    {
+      data = static_cast<double*>(std::aligned_alloc(64, rows * stride_ * sizeof(double)));
+    };
+    ~Grid() {
+      std::free(data);
+    }
 
-  double& operator()(std::size_t i, std::size_t j) {return data[i * cols_ + j];};
-  double  operator()(std::size_t i, std::size_t j) const {return data[i * cols_ + j];};
-  std::size_t rows() const{return rows_;};
-  std::size_t cols() const{return cols_;};
+    double& operator()(std::size_t i, std::size_t j) {return data[i * stride_ + j];};
+    double  operator()(std::size_t i, std::size_t j) const {return data[i * stride_ + j];};
+    std::size_t rows() const{return rows_;};
+    std::size_t cols() const{return cols_;};
+    std::size_t stride() const{return stride_;};
+    
+    // copy constructor
+    Grid(const Grid&) = delete;
+    // copy assignment
+    Grid& operator=(const Grid&) = delete;
+
+    // move constructor
+    Grid(Grid&& other) noexcept
+        : rows_{other.rows_}, cols_{other.cols_}, stride_{other.stride_}, data{other.data} {
+        other.data = nullptr;
+        other.rows_ = 0;
+        other.cols_ = 0;
+        other.stride_ = 0;
+    }
+
+    //move assignment
+    Grid& operator=(Grid&& other) noexcept {
+        if (this != &other) {
+            std::free(data);
+            rows_ = other.rows_;
+            cols_ = other.cols_;
+            stride_ = other.stride_;
+            data = other.data;
+            other.data = nullptr;
+            other.rows_ = other.cols_ = other.stride_ = 0;
+        }
+        return *this;
+    }
 };  
 
 // Apply the five-point stencil over all interior points, copying the boundary
@@ -34,36 +71,30 @@ public:
 void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const std::size_t rows = old_grid.rows();
   const std::size_t cols = old_grid.cols();
-  
-  // copying bits I believe is faster than manually assignment
-  // empirically saw ~ 20 ms of improvement from this alone
+  const std::size_t stride = old_grid.stride();
+
   std::memcpy(&new_grid.data[0], &old_grid.data[0], cols * sizeof(double));
   std::memcpy(
-      &new_grid.data[cols * (rows-1)],
-      &old_grid.data[cols * (rows-1)],
+      new_grid.data + stride * (rows - 1), // we need only to copy until cols
+      old_grid.data + stride * (rows - 1), // the remaining values aren't used
       cols * sizeof(double)
       );
 
-  for (std::size_t i = 1; i < rows - 1; ++i) {
-    // avoid function overhead
-    new_grid.data[i * cols] = old_grid.data[i * cols];
-    new_grid.data[(i+1) * cols - 1] = old_grid.data[(i+1) * cols - 1] ;
-  }
-
-  #pragma omp parallel for
+#pragma omp parallel for 
   for(std::size_t i = 1; i < rows - 1; ++i) {
-    // store pointers for each row so that it isn't recomputed every line
-    const double* prev = old_grid.data.data() + (i-1) * cols;
-    const double* cur = old_grid.data.data() + i * cols;
-    const double* next = old_grid.data.data() + (i+1) * cols;
-    double* to = new_grid.data.data() + i * cols;
+    const double* __restrict__ prev = old_grid.data + (i-1) * stride;
+    const double* __restrict__ cur = old_grid.data + i * stride;
+    const double* __restrict__ next = old_grid.data + (i+1) * stride;
+    double* __restrict__ to = new_grid.data + i * stride;
+    to[0] = cur[0];
+    to[cols - 1] = cur[cols - 1];
 
-  #pragma omp simd
+#pragma omp simd
     for(std::size_t j = 1; j < cols - 1; ++j) {
-      // combining everything into paratheses reduced float operations from multiplication
-      // multiplication takes the same amount of cycles though
-      to[j] = (prev[j] + cur[j-1] + cur[j] * 4.0 + cur[j+1] + next[j]) * 0.125;
+      to[j] = std::fma(((prev[j] + next[j]) + (cur[j-1]+ cur[j+1])), 0.125, cur[j] * 0.5) ;
     }
   }
+
 };
+
 
