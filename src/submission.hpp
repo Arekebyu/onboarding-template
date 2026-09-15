@@ -22,10 +22,19 @@ class Grid {
     Grid(std::size_t rows, std::size_t cols)
       : rows_{rows}
     , cols_{cols}
-    , stride_{(cols + 7) & ~7} // ceiling to nearest 8 for alignment on doubles
-    , data{nullptr}
+    , stride_{(cols + 8)} // I have no idea why but this improves throughput
+    , data{nullptr}       // might be something to do with cache aliasing
     {
-      data = static_cast<double*>(std::aligned_alloc(64, rows * stride_ * sizeof(double)));
+      // data = static_cast<double*>(std::aligned_alloc(64, rows * stride_ * sizeof(double)));
+      data = static_cast<double*>(std::malloc(rows * stride_ * sizeof(double))); // aligned alloc doens't change anything it seems
+                                                                                 // iterating from 1 to  is inherently unaligned throughput
+                                                                                 // might want to experiment more with it
+
+      #pragma omp parallel for schedule(static)
+      for(size_t i = 0; i < rows * stride_; ++i){
+        data[i] = 0.0;
+      }
+
     };
     ~Grid() {
       std::free(data);
@@ -80,7 +89,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       cols * sizeof(double)
       );
 
-#pragma omp parallel for 
+// #pragma omp parallel for schedule(static)
   for(std::size_t i = 1; i < rows - 1; ++i) {
     const double* __restrict__ prev = old_grid.data + (i-1) * stride;
     const double* __restrict__ cur = old_grid.data + i * stride;
@@ -89,9 +98,9 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
     to[0] = cur[0];
     to[cols - 1] = cur[cols - 1];
 
-#pragma omp simd
+// compiler already vectorizes this without flag
     for(std::size_t j = 1; j < cols - 1; ++j) {
-      to[j] = std::fma(((prev[j] + next[j]) + (cur[j-1]+ cur[j+1])), 0.125, cur[j] * 0.5) ;
+      to[j] = std::fma(((prev[j] + next[j]) + (cur[j-1]+ cur[j+1])), 0.125, cur[j] * 0.5);
     }
   }
 
