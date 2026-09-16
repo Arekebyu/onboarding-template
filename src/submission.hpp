@@ -22,8 +22,8 @@ class Grid {
     Grid(std::size_t rows, std::size_t cols)
       : rows_{rows}
     , cols_{cols}
-    , stride_{(cols + 8)} // I have no idea why but this improves throughput
-    , data{nullptr}       // might be something to do with cache aliasing
+    , stride_{cols + 8 }
+    , data{nullptr}
     {
       // data = static_cast<double*>(std::aligned_alloc(64, rows * stride_ * sizeof(double)));
       data = static_cast<double*>(std::malloc(rows * stride_ * sizeof(double))); // aligned alloc doens't change anything it seems
@@ -57,7 +57,7 @@ class Grid {
         other.data = nullptr;
         other.rows_ = 0;
         other.cols_ = 0;
-        other.stride_ = 0;
+      other.stride_ = 0;
     }
 
     //move assignment
@@ -89,7 +89,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
       cols * sizeof(double)
       );
 
-// #pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static)
   for(std::size_t i = 1; i < rows - 1; ++i) {
     const double* __restrict__ prev = old_grid.data + (i-1) * stride;
     const double* __restrict__ cur = old_grid.data + i * stride;
@@ -98,11 +98,13 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
     to[0] = cur[0];
     to[cols - 1] = cur[cols - 1];
 
-// compiler already vectorizes this without flag
-    for(std::size_t j = 1; j < cols - 1; ++j) {
+    // compiler already vectorizes this without flag
+    for(std::size_t j = 1; j < cols -1 ; ++j) {
       to[j] = std::fma(((prev[j] + next[j]) + (cur[j-1]+ cur[j+1])), 0.125, cur[j] * 0.5);
     }
   }
+
+
 
 };
 
