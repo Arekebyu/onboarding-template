@@ -22,7 +22,7 @@ class Grid {
     Grid(std::size_t rows, std::size_t cols)
       : rows_{rows}
     , cols_{cols}
-    , stride_{cols + 8 }
+    , stride_{cols + 56} // speedup peaks at this value
     , data{nullptr}
     {
       // data = static_cast<double*>(std::aligned_alloc(64, rows * stride_ * sizeof(double)));
@@ -101,6 +101,7 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
     // compiler already vectorizes this without flag
     for(std::size_t j = 1; j < cols -1 ; ++j) {
       to[j] = std::fma(((prev[j] + next[j]) + (cur[j-1]+ cur[j+1])), 0.125, cur[j] * 0.5);
+      // to[j] = ((prev[j] + next[j]) + (cur[j-1]+ cur[j+1]) + cur[j] * 4.0) * 0.125;
     }
   }
 
