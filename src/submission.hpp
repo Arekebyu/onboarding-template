@@ -4,7 +4,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
-#include <iostream>
+#include <vector>
 
 // Starter Grid for the 2D heat-diffusion problem.
 //
@@ -19,19 +19,18 @@ class Grid {
     // additions from here
 
   public:
-    vector<double> data;
+    std::vector<double> data;
     Grid(std::size_t rows, std::size_t cols)
       : rows_{rows}
     , cols_{cols}
-    , stride_{(cols_ + 7) & (~7)}
-    , data{nullptr}
+    , stride_{(cols_ + 7) & (~7ULL)}
     {
       // check if stride is power of two to remove cache aliasing
-      if ((stride_ & (stride_ - 1)) == 0,0) {
-        stride_ += cols_ + 8;
+      if ((stride_ & (stride_ - 1)) == 0) {
+        stride_ += 8;
       } 
 
-      data = vector(rows * stride_);
+      data.resize(rows * stride_);
     };
 
 
@@ -50,25 +49,34 @@ void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const std::size_t stride = old_grid.stride();
 
 // Copy first and last row
-  std::memcpy(&new_grid(0), &old_grid.data(0), cols * sizeof(double));
-  std::memcpy(
-      new_grid.data.data + stride * (rows - 1), // we need only to copy until last column
-      old_grid.data.data + stride * (rows - 1), // the remaining values are garbage
-      cols * sizeof(double)
-      );
+  std::copy(
+      old_grid.data.begin(),
+      old_grid.data.begin() + cols,
+      new_grid.data.begin());
+  
+  size_t last_row = stride * (rows - 1);
+  std::copy(
+    old_grid.data.begin() + last_row,
+    old_grid.data.begin() + last_row + cols,
+    new_grid.data.begin() + last_row);
 
+// Copy first and last column
   for(std::size_t i = 1; i < rows - 1; ++i) {
     new_grid(i, 0)        = old_grid(i, 0);
     new_grid(i, cols - 1) = old_grid(i, cols-1);
+  }
+// Prevent accessing outside memory
+  if (rows < 3 || cols < 3) {
+    return;
   }
 
 #pragma omp parallel for schedule(static)
   for(std::size_t i = 1; i < rows - 1; ++i) {
 // compute pointers to crawl along with the index
-    const double* __restrict__ prev = old_grid.data.data  + (i-1) * stride; // North
-    const double* __restrict__ cur = old_grid.data.data   + i * stride;     // Center
-    const double* __restrict__ next = old_grid.data.data  + (i+1) * stride; // South
-    double* __restrict__ to = new_grid.data.data          + i * stride;     // Destination
+    const double* __restrict__ prev = old_grid.data.data()  + (i-1) * stride; // North
+    const double* __restrict__ cur = old_grid.data.data()   + i * stride;     // Center
+    const double* __restrict__ next = old_grid.data.data()  + (i+1) * stride; // South
+    double* __restrict__ to = new_grid.data.data()          + i * stride;     // Destination
 
 // The compiler automatically converts the below to SIMD instructions.
 #pragma omp simd
